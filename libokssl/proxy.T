@@ -1,5 +1,4 @@
-
-// -*-c++-*-
+// -*- mode: c++; tab-width: 8; c-basic-offset: 4; indent-tabs-mode: nil; -*-
 /* $Id: ok.T 3066 2007-09-19 00:36:58Z max $ */
 
 #include "okwsconf.h"
@@ -20,7 +19,17 @@ namespace okssl {
   {
     return (room_left () > 0 || _force_read);
   }
-  
+
+  bool
+  ssl_to_std_proxy_t::is_sync_readable () const
+  {
+      //  http://www.opensubscriber.com/message/openssl-users@openssl.org/8645223.html
+      return (is_readable()
+              && SSL_is_init_finished(_ssl)
+              // Don't call ssl_pending during the handshake...
+              && SSL_pending(_ssl) > 0);
+  }
+
   //-----------------------------------------------------------------------
   
   void 
@@ -40,50 +49,64 @@ namespace okssl {
 #define BUFSZ 0x1000
     char buf[BUFSZ];
     int rc;
+    int bytes_read = 0;
     bool doing_accept;
-    
-    if (!SSL_is_init_finished (_ssl)) {
-      rc = SSL_accept (_ssl);
-      doing_accept = true;
-    } else {
-     
-      if (_handshake_ev) {
-	evv_t::ptr ev = _handshake_ev;
-	_handshake_ev = NULL;
-	ev->trigger ();
-      }
+    do {
+        if (!SSL_is_init_finished (_ssl)) {
+            rc = SSL_accept (_ssl);
+            doing_accept = true;
+        } else {
 
-      ssize_t sz = room_left ();
-      assert (sz > 0 || _force_read);
-      rc = SSL_read (_ssl, buf, min<ssize_t> (sz, BUFSZ));
-      if (_force_read)
-	_force_read = false;
-      doing_accept = false;
-    }
-    
-    if (rc > 0) {
-      if (!doing_accept)
-	_buf.copy (buf, rc);
-    } else if (rc < 0) {
-      int err = SSL_get_error (_ssl, rc);
-      switch (err) {
-      case SSL_ERROR_WANT_READ:
-	_force_read = true;
-	errno = EAGAIN;
-	break;
-      case SSL_ERROR_WANT_WRITE:
-	_other_way->force_write ();
-	errno = EAGAIN;
-	break;
-      default:
-	ssl_complain ("SSL_read encountered an error: ");
-	errno = EIO;
-	break;
-      }
-    }
+            if (_handshake_ev) {
+                evv_t::ptr ev = _handshake_ev;
+                _handshake_ev = NULL;
+                ev->trigger ();
+            }
+
+            ssize_t sz = room_left ();
+            if (sz == 0 && !_force_read) {
+                return bytes_read;
+            }
+            rc = SSL_read (_ssl, buf, min<ssize_t> (sz, BUFSZ));
+
+            // MM: Don't let clients renegotiate if the option is set to 
+            // prevent a DoS threat
+            if (!_cli_renog && _renegotiations > 1) {
+                ssl_complain ("SSL_read: error: SSL client renegotiation\n");
+                return 0;
+            }
+
+            if (_force_read)
+                _force_read = false;
+            doing_accept = false;
+        }
+
+        if (rc > 0) {
+            bytes_read += rc;
+            if (!doing_accept)
+                _buf.copy (buf, rc);
+        } else if (rc < 0) {
+            int err = SSL_get_error (_ssl, rc);
+            switch (err) {
+            case SSL_ERROR_WANT_READ:
+                _force_read = true;
+                errno = EAGAIN;
+                break;
+            case SSL_ERROR_WANT_WRITE:
+                _other_way->force_write ();
+                errno = EAGAIN;
+                break;
+            default:
+                ssl_complain ("SSL_read encountered an error: ");
+                errno = EIO;
+                break;
+            }
+            return rc;
+        }
+    } while (rc > 0);
 
 #undef BUFSZ
-    return rc;
+    return bytes_read;
   }
 
   //-----------------------------------------------------------------------
@@ -164,7 +187,7 @@ namespace okssl {
   //-----------------------------------------------------------------------
 
   bool
-  proxy_t::init (SSL_CTX *ctx, int encfd, int plainfd)
+  proxy_t::init (SSL_CTX *ctx, int encfd, int plainfd, bool cli_renog)
   {
     bool ret = false;
     if (!ctx) {
@@ -183,10 +206,14 @@ namespace okssl {
 	warn << "Failed to initalized SSL on given FD\n";
       } else {
 
-	_handshaker = New refcounted<ssl_to_std_proxy_t> (_ssl);
+	_handshaker = New refcounted<ssl_to_std_proxy_t>(_ssl, cli_renog);
 	_prx[0] = _handshaker;
 	_prx[1] = New refcounted<std_to_ssl_proxy_t> (_ssl);
-	
+
+	// MM: Set app data so we can track this thing
+	ssl_to_std_proxy_t* phs = _handshaker;
+	SSL_set_app_data(_ssl, phs);
+
 	for (size_t i = 0; i < 2; i++) {
 	  if (OKDBG2(SSL_PROXY)) {
 	    _prx[i]->set_debug_level (2);
@@ -289,6 +316,7 @@ namespace okssl {
     if (_encfd >= 0) close (_encfd);
     if (_encfd >= 0) close (_plainfd);
     if (_ssl) SSL_free (_ssl);
+    if (_handshaker) { _handshaker = NULL; }
   }
 
   //-----------------------------------------------------------------------

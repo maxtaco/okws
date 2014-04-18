@@ -32,6 +32,7 @@ namespace rfn3 {
     F(html_escape);
     F(tag_escape);
     F(json_escape);
+    F(js_escape);
     F(hidden_escape);
     F(substr);
     F(strip);
@@ -46,12 +47,16 @@ namespace rfn3 {
     F(values);
     F(keys);
     F(items);
+    F(remove);
     F(json2pub);
+    F(cgi2pub);
     F(now);
     F(days_from_now);
     F(time_from_now);
     F(time_format);
     F(localtime);
+    F(localtime_raw);
+    F(mktime);
     F(strptime);
     F(decorate);
     F(isnull);
@@ -60,6 +65,7 @@ namespace rfn3 {
     F(dump_env);
     F(contains);
     F(int);
+    F(uint);
     F(round);
     F(cmp_float);
     F(ceil);
@@ -70,6 +76,7 @@ namespace rfn3 {
     F(bitwise_leftshift);
     F(bitwise_rightshift);
     F(str);
+    F(documentation);
     F(logwarn);
     F(warn);
     F(warn_trace);
@@ -101,9 +108,19 @@ namespace rfn3 {
     F(pow);
     F(sqrt);
     F(splice);
+    F(slice);
+    F(reserve);
     F(index_of);
     F(eval_location);
     F(breadcrumb);
+    F(stacktrace);
+    F(cos);
+    F(sin);
+    F(tan);
+    F(asin);
+    F(acos);
+    F(atan);
+    F(atan2);
 
 #undef F
 

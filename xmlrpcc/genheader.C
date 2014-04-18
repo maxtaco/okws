@@ -154,13 +154,15 @@ pswitch (str prefix, const rpc_union *rs, str swarg,
   bool hasdefault = false;
   str subprefix = strbuf () << prefix << "  ";
 
-  aout << prefix << "switch (" << swarg << ") {" << suffix;
+  bool btype = (rs->tagtype == "bool");
+  aout << prefix << "switch (" << ((btype) ? "(int)" : "") << swarg << ") {" 
+       << suffix;
   for (const rpc_utag *rt = rs->cases.base (); rt < rs->cases.lim (); rt++) {
     if (rt->swval) {
       if (rt->swval == "TRUE")
-	aout << prefix << "case true:" << suffix;
+	aout << prefix << "case 1:" << suffix;
       else if (rt->swval == "FALSE")
-	aout << prefix << "case false:" << suffix;
+	aout << prefix << "case 0:" << suffix;
       else
 	aout << prefix << "case " << rt->swval << ":" << suffix;
     }
@@ -358,7 +360,7 @@ dumpenum (const rpc_sym *s)
     else if (lastval && (isdigit (lastval[0]) || lastval[0] == '-'
 			 || lastval[0] == '+'))
       aout << "  " << rc->id << " = "
-	   << strtol (lastval, NULL, 0) + ctr++ << ",\n";
+           << strtol (lastval.cstr(), NULL, 0) + ctr++ << ",\n";
     else if (lastval)
       aout << "  " << rc->id << " = " << lastval << " + " << ctr++ << ",\n";
     else
@@ -430,8 +432,8 @@ dumpprog (const rpc_program *rs)
     for (const rpc_proc *rp = rv->procs.base (); rp < rv->procs.lim (); rp++) {
       while (n++ < rp->val)
 	aout << " \\\n  macro (" << n-1 << ", false, false)";
-      aout << " \\\n  macro (" << rp->id << ", " << rp->arg
-	   << ", " << rp->res << ")";
+      aout << " \\\n  macro (" << rp->id << ", " << rp->arg.type
+	   << ", " << rp->res.type << ")";
     }
     aout << "\n";
     aout << "#define " << rs->id << "_" << rv->val << "_APPLY(macro) \\\n  "
@@ -539,7 +541,8 @@ is_builtin(const str &s)
 }
 
 static void
-dump_tmpl_class (const str &arg, const str &res, const str &c, const str &spc)
+dump_tmpl_class (const str &arg, const str &res, const str &c, const str& fn,
+                 const str& rpc, const str &spc)
 {
   aout << spc << "template<class S>\n"
        << spc << "class " << c << " {\n"
@@ -568,7 +571,6 @@ dump_tmpl_class (const str &arg, const str &res, const str &c, const str &spc)
 	 << "ptr<" << res << ">\n"
 	 << spc << "  alloc_res (const T &t) "
 	 << " { return New refcounted<" << res << "> (t); }\n";
-
   } else {
     aout << spc << "  " << "void reply () "
 	 << "{ check_reply (); _sbp->reply (NULL); }\n";
@@ -583,6 +585,28 @@ dump_tmpl_class (const str &arg, const str &res, const str &c, const str &spc)
        << spc << "  " << "void reject () "
        << "{ check_reply (); _sbp->reject (); }\n\n";
 
+  // MM: Generate typedefs for types, if they don't exist mark them void
+  aout << spc << "  typedef " << (arg ? arg : str("void")) << " arg_ty;\n\n";
+  aout << spc << "  typedef " << (res ? res : str("void")) << " res_ty;\n\n";
+
+  // MM: Call with standard amount of arguments
+  str argstr="void", resstr="void";
+  if (arg) argstr = arg;
+  if (res) resstr = res;
+  dump_tmpl_proc_1(argstr, resstr, "call_full", spc << "  ", true, rpc,
+                 "C", "C", NULL, true);
+
+  // MM: Call that mirrors the ones generated before this class
+  argstr = ""; resstr = "";
+  if (arg) argstr = "const " << arg << "* arg,";
+  if (res) resstr = " " << res << "* res,";
+  aout << spc << "  template<class C, class E>\n";
+  aout << spc << "  void call(C c, " << argstr
+       << resstr << " E cb)\n";
+  argstr=""; resstr="";
+  if (arg) argstr = "arg, ";
+  if (res) resstr = "res,";
+  aout << spc << "  { " << fn << "(c, " << argstr << resstr << " cb); }\n\n";
 
   aout << spc << "private:\n"
        << spc << "  void check_reply () "
@@ -597,15 +621,15 @@ dump_tmpl_proc (const rpc_proc *rc)
 {
   str arg, res;
   str fn = tolower (rc->id);
-  if (rc->arg != "void") arg = rc->arg;
-  if (rc->res != "void") res = rc->res;
+  if (rc->arg.type != "void") arg = rc->arg.type;
+  if (rc->res.type != "void") res = rc->res.type;
   str spc = "    ";
 
   aout << "\n";
   aout << spc << "// " << rc->id 
        << " -----------------------------------------\n\n";
   dump_tmpl_proc_3 (arg, res, fn, spc, rc->id);
-  dump_tmpl_class (arg, res, strbuf ("%s_srv_t", fn.cstr ()), spc);
+  dump_tmpl_class (arg, res, strbuf ("%s_srv_t", fn.cstr ()), fn, rc->id, spc);
 }
 
 static void
@@ -675,7 +699,7 @@ makeguard (str fname)
   strbuf guard;
   const char *p;
 
-  if ((p = strrchr (fname, '/')))
+  if ((p = strrchr (fname.cstr(), '/')))
     p++;
   else p = fname;
 

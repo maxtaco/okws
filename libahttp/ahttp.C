@@ -40,8 +40,8 @@ time_t global_ssd_last = 0;
 int n_ahttpcon = 0;
 
 
-ahttpcon::ahttpcon (int f, sockaddr_in *s, int mb, int rcvlmt, bool coe,
-		    bool ma)
+ahttpcon::ahttpcon (int f, sockaddr_in *s, int mb, int rcvlmt, bool coe, 
+                    bool ma)
   : start (sfs_get_timenow ()), fd (f), rcbset (false), 
     wcbset (false), _bytes_recv (0), bytes_sent (0),
     eof (false), destroyed (false), out (suio_alloc ()), sin (s),
@@ -57,8 +57,7 @@ ahttpcon::ahttpcon (int f, sockaddr_in *s, int mb, int rcvlmt, bool coe,
     _remote_port (0),
     _source_hash (0),
     _source_hash_ip_only (0),
-    _reqno (0),
-    _do_peek (false)
+    _reqno (0)
 {
   //
   // bookkeeping for debugging purposes;
@@ -97,7 +96,6 @@ ahttpcon_clone::takefd ()
 {
   int ret = ahttpcon::takefd ();
   ccb = NULL;
-  _demuxed = true;
   return ret;
 }
 
@@ -226,25 +224,8 @@ ahttpcon::setrcb (cbi::ptr cb)
 }
 
 ahttpcon_clone::ahttpcon_clone (int f, sockaddr_in *s, size_t ml)
-  : ahttpcon (f, s, ml), maxline (ml), ccb (NULL), 
-    found (false), delimit_state (0), delimit_status (HTTP_OK),
-    delimit_start (NULL), bytes_scanned (0), decloned (false),
-    trickle_state (0), dcb (NULL), _demuxed (false)
-{
-  in->setpeek ();
-  _do_peek = true;
-}
-
-//-----------------------------------------------------------------------
-
-ahttpcon_clone::~ahttpcon_clone ()
-{
-  if (dcb) {
-    timecb_remove (dcb);
-    dcb = NULL;
-  }
-  *destroyed_p = true;
-}
+  : ahttpcon (f, s, ml), maxline (ml), ccb (NULL), decloned (false)
+{ }
 
 //-----------------------------------------------------------------------
 
@@ -486,7 +467,17 @@ ahttpcon_clone::recvd_bytes (size_t n)
     ahttpcon::recvd_bytes (n);
     return;
   }
-  str s = delimit (n);
+
+  while (in->resid()) {
+      ssize_t nbytes;
+      char *p = in->getdata(&nbytes);
+      request_bytes.setsize(request_bytes.size() + nbytes);
+      memcpy(&request_bytes[request_bytes.size() - nbytes], p, nbytes);
+      in->rembytes(nbytes);
+  }
+
+  int delimit_status = HTTP_OK;
+  str s = delimit (&delimit_status);
   if (s || delimit_status != HTTP_OK) {
 
     if (ccb) {
@@ -519,7 +510,6 @@ ahttpcon_clone::end_read ()
   if (fd >= 0) {
     rcbset = false;
     fdcb (fd, selread, NULL);
-    found = true;
   }
 }
 
@@ -527,29 +517,21 @@ void
 ahttpcon_clone::declone ()
 {
   decloned = true;
-  in->setpeek (false);
 }
 
 str
-ahttpcon_clone::delimit (int dummy)
+ahttpcon_clone::delimit (int *delimit_status)
 {
-  ssize_t nbytes;
-  int i;
-  while (in->resid ()) {
-    i = 0;
-    for (char *p = in->getdata (&nbytes); i < nbytes; i++, p++) {
-      if (++bytes_scanned > maxline) {
-	delimit_status = HTTP_URI_TOO_BIG;
-	in->rembytes (i);
-	return NULL;
-      }
+  int delimit_state = 0;
+  const char *delimit_start = nullptr;
+
+  for (const char &p : request_bytes) {
       switch (delimit_state) {
       case 0:
-	if (*p == ' ') 
+	if (p == ' ') 
 	  delimit_state = 1;
-	else if (*p < 'A' || *p > 'Z') {
-	  delimit_status = HTTP_BAD_REQUEST;
-	  in->rembytes (i);
+	else if (p < 'A' || p > 'Z') {
+	  *delimit_status = HTTP_BAD_REQUEST;
 	  return NULL;
 	}
 	break;
@@ -558,90 +540,34 @@ ahttpcon_clone::delimit (int dummy)
 	// browsers will separate the request method (e.g. "GET" or "HEAD")
 	// from the Request-URI with 1 space, although broken browsers
 	// might not.
-	if (*p == ' ')
+	if (p == ' ')
 	  break;
 	delimit_state = 2;
       case 2:
 	if (!delimit_start) 
-	  delimit_start = p;
-	if (*p == ' ' || *p == '?' || *p == '\r' || *p == '\n') {
-	  return str (delimit_start, p - delimit_start);
+	  delimit_start = &p;
+	if (p == ' ' || p == '?' || p == '\r' || p == '\n') {
+	  return str (delimit_start, &p - delimit_start);
 	}
 	break;
       default:
-	delimit_status = HTTP_BAD_REQUEST;
-	in->rembytes (i);
+	*delimit_status = HTTP_BAD_REQUEST;
 	return NULL;
       }
-    }
-    in->rembytes (i);
   }
 
-  if (bytes_scanned > maxscan ()) {
-    delimit_status = HTTP_NOT_FOUND;
-    return NULL;
+  if (request_bytes.size() > maxline) {
+      *delimit_status = HTTP_URI_TOO_BIG;
+      return NULL;
   }
 
-  // at this point, the client is "trickling" out data --
-  // 
-
-  u_int to;
-  switch (trickle_state) {
-  case 0: 
-
-    warn << "slow trickle client";
-    if (remote_ip)
-      warnx << ": " << remote_ip;
-    warnx << "\n";
-
-    to = ok_demux_timeout / 2;
-    if (to) {
-      dcb = delaycb (to, 0,
-		     wrap (this, &ahttpcon_clone::trickle_cb, destroyed_p));
-      disable_selread ();
-      reset_delimit_state ();
-      break;
-    } else {
-      trickle_state = 1;
-      //fall through to next case in switch statement
-    }
-  case 1:
-
-    warnx << "abandoning slow trickle client";
-    if (remote_ip)
-      warnx << ": " << remote_ip;
-    warnx << "\n";
-
-    delimit_status = HTTP_TIMEOUT;
-    break;
-  default:
-    assert (false);
-    break;
-  }
-  trickle_state ++;
   return (NULL);
-}
-
-void
-ahttpcon_clone::trickle_cb (ptr<bool> destroyed_local)
-{
-  if (*destroyed_local) 
-    return;
-  dcb = NULL;
-  enable_selread ();
 }
 
 int
 ahttpcon::set_lowwat (int lev)
 {
   return setsockopt (fd, SOL_SOCKET, SO_RCVLOWAT, (char *)&lev, sizeof (lev));
-}
-
-void
-ahttpcon_clone::reset_delimit_state ()
-{
-  delimit_state = 0;
-  bytes_scanned = 0;
 }
 
 void
@@ -775,15 +701,6 @@ ahttpcon::select_set () const
   return b;
 }
 
-str
-ahttpcon_clone::get_debug_info () const
-{
-  strbuf b;
-  b << "; demuxed=" << int (_demuxed) << "; decloned=" << int (decloned)
-    << "; status=" << int (delimit_status) ;
-  return b;
-}
-
 //-----------------------------------------------------------------------
 
 abuf_src_t *
@@ -907,34 +824,41 @@ ahttpcon::all_info () const
 void
 ahttp_tab_t::run ()
 {
-  dcb = NULL;
-  ahttp_tab_node_t *n;
+    dcb = NULL;
+    ahttp_tab_node_t *n;
 
-  assert (!_shutdown);
+    assert (!_shutdown);
 
-  bool flag = true;
-  while ((n = q.first) && flag) {
-    if (* n->_destroyed_p ) {
-      unreg (n);
-    } else {
-      ptr<ahttpcon> a = mkref (n->_a); // hold onto this
-      if (int (sfs_get_timenow() - n->_a->start) > 
-	  int (ok_demux_timeout)) {
+    bool flag = true;
+    while ((n = q.first) && flag) {
+        if (* n->_destroyed_p ) {
+            unreg (n);
+        } else {
+            ptr<ahttpcon> a = mkref (n->_a); // hold onto this
 
-	str ai = a->all_info ();
+            // MM: If a keep-alive conn has timed out, just kill it here hard
+            if (a->get_reqno() > 0 && !a->bytes_recv() &&
+                sfs_get_timenow() - n->_a->start > ok_ka_timeout) {
+                a->cancel();
+                unreg(n);
+                continue;
+            }
 
-	// Don't warn for HTTP keepalives timing out...
-	if (a->get_reqno () == 0) {
-	  warn << "HTTP connection timed out in demux " << ai << "\n";
-	}
-	a->hit_timeout ();
-	unreg (n);
-      }  else {
-	flag = false;
-      }
+            // MM: handle non-keep alive and normal connections with the
+            // demux timeout procedure
+            if ((a->get_reqno() == 0 || a->bytes_recv() > 0) && 
+                int (sfs_get_timenow() - n->_a->start) > 
+                int (ok_demux_timeout)) {
+                str ai = a->all_info ();
+                warn << "HTTP connection timed out in demux " << ai << "\n";
+                a->hit_timeout ();
+                unreg (n);
+            }  else {
+                flag = false;
+            }
+        }
     }
-  }
-  sched ();
+    sched ();
 }
 
 //-----------------------------------------------------------------------
@@ -988,9 +912,7 @@ ahttpcon::set_keepalive_data (const keepalive_data_t &kad)
 	 kad._reqno, kad._len, fd);
   
   if ((ret = kad._len) && kad._buf) {
-    in->set_dont_peek (true);
     in->load_from_buffer (kad._buf, ret);
-    _do_peek = false;
   }
   return ret;
 }

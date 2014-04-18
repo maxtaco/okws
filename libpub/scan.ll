@@ -668,7 +668,7 @@ json_str_add_unicode (const char *in)
 {
    str s = unicode_to_utf8 (in);
    if (s) {
-      json_str_addstr (s);
+      json_str_addstr (s.cstr());
    }
 }
 
@@ -693,6 +693,13 @@ yy_parse_json (str s)
 {
   yy_json_mode = 1;
   yy_push_state (JSON);
+  yy_scan_bytes (s.cstr (), s.len());
+}
+
+void
+yy_parse_pub (str s)
+{
+  yy_push_state (H);
   yy_scan_bytes (s.cstr (), s.len());
 }
 

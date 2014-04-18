@@ -155,7 +155,7 @@ if test "$with_mysql" != "no"; then
 	AC_CACHE_CHECK(for mysql.h, sfs_cv_mysql_h,
 	[for dir in " " $dirs; do
 		case $dir in
-			" ") iflags="-I" ;;
+			" ") iflags=" " ;;
 			*) iflags="-I${dir}" ;;
 		esac
 		CFLAGS="${ac_save_CFLAGS} $iflags"
@@ -178,8 +178,8 @@ if test "$with_mysql" != "no"; then
 		[for dir in "" " " $dirs; do
 			case $dir in
 				"") lflags=" " ;;
-				" ") lflags="-l$libname -lm" ;;
-				*) lflags="-L${dir} -l$libname -lm" ;;
+				" ") lflags="-l$libname -lm -lssl -lpthread -lrt" ;;
+				*) lflags="-L${dir} -l$libname -lm -lssl -lpthread -lrt" ;;
 			esac
 			LIBS="$ac_save_LIBS $lflags"
 			AC_TRY_LINK([#include "mysql.h"],
@@ -448,7 +448,7 @@ if test "$with_ssl" != "no"; then
 	ac_save_CFLAGS=$CFLAGS
 	ac_save_LIBS=$LIBS
 	dirs=""
-	if test ${with_ssl+set} && "${with_ssl}"; then
+	if test ${with_ssl+set} -a "${with_ssl}"; then
 		dirs="$dirs ${with_ssl} ${with_ssl}/include"
 	fi
 	if test "${prefix}" != "NONE"; then
@@ -470,9 +470,36 @@ if test "$with_ssl" != "no"; then
 		okws_cv_ssl_h="yes"
 	fi
 	])
+
+dnl Check for no compression support from SSL
+    AC_CACHE_CHECK(for ssl with compression disable, okws_cv_sslnc,
+    [for dir in " " $dirs ; do
+		case $dir in
+			" ") iflags=" " ;;
+			*)   iflags="-I${dir}" ;; 
+		esac
+		CFLAGS="${ac_save_CFLAGS} $iflags"
+		AC_TRY_COMPILE([#include <openssl/ssl.h>], 
+                               [ (void)SSL_new((SSL_CTX *)NULL);
+                                 SSL_CTX_set_options(NULL, SSL_OP_NO_COMPRESSION);],
+				okws_cv_sslnc="${iflags}"; break)
+	done
+	if test "$okws_cv_sslnc" = " " ; then
+		okws_cv_sslnc="yes"
+	fi
+    if test -z $okws_cv_sslnc; then
+        okws_cv_sslnc="no"
+    fi
+	])
+
 	if test "$okws_cv_ssl_h" = "yes"; then
 		okws_cv_ssl_h=" "
 	fi
+
+    if test "$okws_cv_sslnc" != "yes" && test "$okws_cv_sslnc" != "no"; then
+        okws_cv_ssl_h=$okws_cv_sslnc
+    fi
+
 	if test "${okws_cv_ssl_h+set}"; then
 		dirs=`echo $okws_cv_ssl_h | sed 's/include/lib/' `
 		dirs=`echo $dirs | sed 's/^-I//' `
@@ -490,13 +517,21 @@ if test "$with_ssl" != "no"; then
 		done
 		if test -z ${okws_cv_libssl+set}; then
 			okws_cv_libssl="no"
-		fi
+        elif test "$okws_cv_sslnc" != "yes" -a "$okws_cv_sslnc" != "no"; then
+            ldir=`echo $okws_cv_ssl_h | sed 's/include/lib/' `
+            ldir=`echo $ldir | sed 's/^-I//' `
+            okws_cv_libssl="-L${ldir} -Wl,-rpath ${ldir} $okws_cv_libssl"
+        fi
 		])
 	fi
+
 	if test "${okws_cv_ssl_h+set}" && test "$okws_cv_libssl" != "no"
 	then
 		CPPFLAGS="$CPPFLAGS $okws_cv_ssl_h"
 		AC_DEFINE(HAVE_SSL, 1, Enable OpenSSL support)
+        if test "$okws_cv_sslnc" != "no"; then
+            AC_DEFINE(HAVE_SSL_NOCOMP, 1, Enable OpenSSL compression disable support)
+        fi
 		LIBSSL="$okws_cv_libssl"
 		use_ssl=yes
 	else
@@ -578,6 +613,48 @@ fi
 AC_SUBST(LIBEXPAT)
 AM_CONDITIONAL(USE_XML, test "${use_xml}" != "no")
 ])
+
+dnl
+dnl Find Snappy
+dnl
+AC_DEFUN([OKWS_SNAPPY],
+[AC_ARG_WITH(snappy,
+--with-snappy=DIR       Specify location of Snappy)
+ac_save_CFLAGS=$CFLAGS
+ac_save_LIBS=$LIBS
+CC_REAL=$CC
+CC=$CXX
+dirs="$with_snappy ${prefix} ${prefix}/snappy"
+dirs="$dirs /usr/local /usr/local/snappy"
+AC_CACHE_CHECK(for snappy.h, okws_cv_snappy_h,
+[for dir in " " $dirs; do
+    iflags="-I${dir}/include"
+    CFLAGS="${ac_save_CFLAGS} $iflags"
+    AC_TRY_COMPILE([#include <snappy.h>], 0,
+	okws_cv_snappy_h="${iflags}"; break)
+done])
+if test -z "${okws_cv_snappy_h+set}"; then
+    AC_MSG_ERROR("Can\'t find snappy.h anywhere")
+fi
+AC_CACHE_CHECK(for libsnappy, okws_cv_libsnappy,
+[for dir in "" " " $dirs; do
+    case $dir in
+	"") lflags=" " ;;
+	" ") lflags="-lsnappy" ;;
+	*) lflags="-L${dir}/lib -lsnappy" ;;
+    esac
+    LIBS="$ac_save_LIBS $lflags"
+    AC_TRY_LINK([#include <snappy.h>],
+	snappy::Compress (NULL, NULL);,
+	okws_cv_libsnappy=$lflags; break)
+done])
+if test -z ${okws_cv_libsnappy+set}; then
+    AC_MSG_ERROR("Can\'t find libsnappy anywhere")
+fi
+CC=$CC_REAL
+CFLAGS=$ac_save_CFLAGS
+CPPFLAGS="$CPPFLAGS $okws_cv_snappy_h"
+LIBS="$ac_save_LIBS $okws_cv_libsnappy"])
 
 dnl
 dnl OKWS_PREFIX

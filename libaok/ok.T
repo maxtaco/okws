@@ -58,6 +58,18 @@ init_syscall_stats ()
 
 //-----------------------------------------------------------------------
 
+bool is_internal(const ptr<const ahttpcon> &con) {
+  static const in_addr_t localhost_ip = inet_addr("127.0.0.1");
+  if (!con)
+    return false;
+  const sockaddr_in *in_addr = con->get_sin();
+  if (!in_addr)
+    return false;
+  return con->get_sin()->sin_addr.s_addr == localhost_ip;
+}
+
+//-----------------------------------------------------------------------
+
 void
 ok_httpsrv_t::malloc_init () {}
 
@@ -242,15 +254,16 @@ tamed void
 oksrvc_t::keepalive (ahttpcon_wrapper_t<ahttpcon> acw)
 {
   tvars {
-    int fd (acw.con()->takefd ());
+    int fd(acw.con()->takefd ());
+    int close_res;
     okctl_sendcon_arg2_t arg;
     okctl_sendcon_res_t res;
     clnt_stat err;
     ptr<aclnt> mycli;
   }
 
-  if (ctlx && (mycli = clnt)) {
-    ctlx->sendfd (fd);
+  if (ctlx && (mycli = clnt) && fd >= 0) {
+    ctlx->sendfd (fd, false);
     acw.to_xdr (&arg);
     twait {
       RPC::okctl_program_1::okctl_keepalive (mycli, arg, &res, mkevent (err));
@@ -264,6 +277,12 @@ oksrvc_t::keepalive (ahttpcon_wrapper_t<ahttpcon> acw)
       b << "Non-ok result from keepalive passback: ";
       rpc_print (b, res);
       okdbg_warn (ERROR, b);
+    }
+    do {
+      close_res = close(fd);
+    }  while (close_res == -1 && errno == EINTR);
+    if (close_res == -1) {
+      perror("TV_ERROR: in oksrvc_t::keepalive while closing fd.");
     }
   }
 }
@@ -394,7 +413,7 @@ oksrvc_t::init (int argc, char *argv[])
   if (_n_children > 1) {
     strbuf b ("%s[%d:%zu]", progname.cstr (), int(getpid ()), _brother_id);
     str s = b;
-    char *new_progname = strdup (s);
+    char *new_progname = strdup (s.cstr());
     b.clear (); // to stop suio-related checks in dmalloc
     setprogname (new_progname);
   }
@@ -983,6 +1002,48 @@ okclnt2_t::set_keepalive_attributes (http_resp_attributes_t *hra)
   }
 }
 
+
+//-----------------------------------------------------------------------
+
+bool okclnt_base_t::is_ssl() const {
+  return _demux_data && _demux_data->ssl();
+}
+
+//-----------------------------------------------------------------------
+
+bool okclnt2_t::is_ssl() const {
+  str proxy_info;
+  if (is_internal(client_con()) && (proxy_info = (*this)["x-forwarded-proto"])) {
+    return proxy_info == "https";
+  }
+  return _demux_data && _demux_data->ssl();
+}
+
+//-----------------------------------------------------------------------
+
+uint32_t okclnt2_t::get_ip() const {
+  str proxy_info;
+  if (is_internal(client_con()) && (proxy_info = (*this)["x-real-ip"])) {
+    struct sockaddr_in addr;
+    if (inet_aton(proxy_info.cstr(), &addr.sin_addr)) {
+      return addr.sin_addr.s_addr;
+    }
+    warn <<  __FILE__ "[" << __LINE__ <<  "] in " << __func__ << ": "
+      "Could not read proxy info properly." << proxy_info << "\n";
+  }
+  return client_con()->get_sin()->sin_addr.s_addr;
+}
+
+//-----------------------------------------------------------------------
+
+str okclnt2_t::get_ip_str() const {
+  str proxy_info;
+  if (is_internal(client_con()) && (proxy_info = (*this)["x-real-ip"])) {
+    return proxy_info;
+  }
+  return inet_ntoa(client_con()->get_sin()->sin_addr);
+}
+
 //-----------------------------------------------------------------------
 
 tamed void
@@ -1373,7 +1434,7 @@ ok_base_t::got_bindaddr (vec<str> s, str loc, bool *errp)
 
   in_addr addr;
   if (s.size () == 3) {
-    if (!inet_aton (s[1], &addr) || !convertint (s[2], &listenport) ||
+    if (!inet_aton (s[1].cstr(), &addr) || !convertint (s[2], &listenport) ||
 	listenport > OK_PORT_MAX) {
       warn << loc << ": usage: BindAddr addr [port]\n";
       *errp = true;
@@ -1385,7 +1446,7 @@ ok_base_t::got_bindaddr (vec<str> s, str loc, bool *errp)
     if (!addr_rxx.match (s[1]) || 
 	(addr_rxx[3] && (!convertint (addr_rxx[3], &listenport) || 
 			 listenport > OK_PORT_MAX)) ||
-	(addr_rxx[1] != "*" && !inet_aton (addr_rxx[1], &addr))) {
+    (addr_rxx[1] != "*" && !inet_aton (addr_rxx[1].cstr(), &addr))) {
       warn << loc << ": usage: BindAddr (<addr>|*)(:<port>)?\n";
       *errp = true;
     } else {
@@ -1465,7 +1526,7 @@ static okws1_port_t
 split_uri (str in, str *out)
 {
   okws1_port_t port = 0;
-  const char *p = in;
+  const char *p = in.cstr();
   if (p[0] == ':') {
     const char *e = strchr (p, '/');
     assert (e && e > p);
@@ -1631,7 +1692,7 @@ ok_base_t::got_generic_exec (vec<str> &s, str loc, bool *errp,
   cmd = s.pop_front ();
 
   while (s.size () && (cp = strchr (s[0].cstr (), '=')))  {
-    if (strncmp (OKWS_DEBUG_OPTIONS, s[0], cp - s[0]) == 0)
+    if (strncmp (OKWS_DEBUG_OPTIONS, s[0].cstr(), cp - s[0]) == 0)
       fnd_dbg = true;
     env.push_back (s.pop_front ());
   }

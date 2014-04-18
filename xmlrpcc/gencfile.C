@@ -80,6 +80,7 @@ mkmshl (str id)
        << "    return true;\n"
        << "  default:\n"
        << "    panic (\"invalid xdr operation %d\\n\", xdrs->x_op);\n"
+       << "    return false;\n"
        << "  }\n"
        << "}\n"
        << "\n";
@@ -122,13 +123,40 @@ mktbl_xml (const rpc_program *rs)
 }
 
 static void
+mktblentry (u_int procno, const rpc_arg &arg, const rpc_arg &res) {
+    aout << "  {\n"
+         << "    \"" << procno << "\",\n"
+         << "    &typeid (" << arg.type << "), " << arg.type << "_alloc, "
+         << (arg.compressed
+                 ? strbuf() << "snappy_xdr_arg<xdr_" << arg.type << ">"
+                 : "xdr_" << arg.type
+            )
+         << ", print_" << arg.type << ",\n"
+         << "    &typeid (" << res.type << "), " << res.type << "_alloc, "
+         << (res.compressed
+                 ? strbuf() << "snappy_xdr_arg<xdr_" << res.type << ">"
+                 : "xdr_" << res.type
+            )
+         << ", print_" << res.type << ",\n"
+         << "  }";
+}
+
+static void
 mktbl (const rpc_program *rs)
 {
   for (const rpc_vers *rv = rs->vers.base (); rv < rs->vers.lim (); rv++) {
     str name = rpcprog (rs, rv);
-    aout << "static const rpcgen_table " << name << "_tbl[] = {\n"
-	 << "  " << rs->id << "_" << rv->val << "_APPLY (XDRTBL_DECL)\n"
-	 << "};\n"
+    aout << "static const rpcgen_table " << name << "_tbl[] = {\n";
+    u_int n{0};
+    for (const rpc_proc &rp : rv->procs) {
+        while (n++ < rp.val) {
+            if (n != 1) { aout << ",\n"; }
+            mktblentry (n-1, {"false"}, {"false"});
+        }
+        if (n != 1) { aout << ",\n"; }
+        mktblentry (n-1, rp.arg, rp.res);
+    }
+    aout << "\n};\n"
 	 << "const rpc_program " << name << " = {\n"
 	 << "  " << rs->id << ", " << rv->id << ", " << name << "_tbl,\n"
 	 << "  sizeof (" << name << "_tbl" << ") / sizeof ("
@@ -300,7 +328,7 @@ make_csafe_filename (str fname)
   strbuf hdr;
   const char *fnp, *cp;
 
-  if ((fnp = strrchr (fname, '/')))
+  if ((fnp = strrchr (fname.cstr(), '/')))
     fnp++;
   else fnp = fname;
 
@@ -571,12 +599,12 @@ print_struct (const rpc_struct *s)
   if (dp < ep)
     aout <<
       "  rpc_print (sb, obj." << dp->id << ", recdepth, "
-      "\"" << dp->id << "\", npref);\n";
+      "\"" << dp->id << "\", npref.cstr());\n";
   while (++dp < ep)
     aout <<
       "  sb << sep;\n"
       "  rpc_print (sb, obj." << dp->id << ", recdepth, "
-      "\"" << dp->id << "\", npref);\n";
+      "\"" << dp->id << "\", npref.cstr());\n";
   aout <<
     "  if (prefix)\n"
     "    sb << prefix << \"};\\n\";\n"
@@ -594,7 +622,7 @@ print_case (str prefix, const rpc_union *rs, const rpc_utag *rt)
     aout
       << prefix << "sb << sep;\n"
       << prefix << "rpc_print (sb, *obj." << rt->tag.id << ", "
-      " recdepth, \"" << rt->tag.id << "\", npref);\n";
+      " recdepth, \"" << rt->tag.id << "\", npref.cstr());\n";
   aout << prefix << "break;\n";
 }
 
@@ -604,9 +632,18 @@ print_break (str prefix, const rpc_union *rs)
   aout << prefix << "break;\n";
 }
 
+static bool will_need_sep(const rpc_union* rs) {
+  for (const rpc_utag *rt = rs->cases.base (); rt < rs->cases.lim (); rt++) {
+    if (rt->tag.type != "void")
+        return true;
+  }
+  return false;
+}
+
 static void
 print_union (const rpc_union *s)
 {
+  bool ns = will_need_sep(s);
   aout <<
     "const strbuf &\n"
     "rpc_print (const strbuf &sb, const " << s->id << " &obj, "
@@ -618,19 +655,19 @@ print_union (const rpc_union *s)
     "      sb << prefix;\n"
     "    sb << \"" << s->id << " \" << name << \" = \";\n"
     "  };\n"
-    "  const char *sep;\n"
+    << ((ns) ? "  const char *sep;\n" : "") <<
     "  str npref;\n"
     "  if (prefix) {\n"
-    "    npref = strbuf (\"%s  \", prefix);\n"
-    "    sep = \"\";\n"
+    "    npref = strbuf (\"%s  \", prefix);\n" 
+    << ((ns) ? "    sep = \"\";\n" : "") <<
     "    sb << \"{\\n\";\n"
     "  }\n"
     "  else {\n"
-    "    sep = \", \";\n"
+    << ((ns) ? "    sep = \", \";\n" : "") <<
     "    sb << \"{ \";\n"
     "  }\n"
     "  rpc_print (sb, obj." << s->tagid << ", recdepth, "
-    "\"" << s->tagid << "\", npref);\n";
+    "\"" << s->tagid << "\", npref.cstr());\n";
   pswitch ("  ", s, "obj." << s->tagid, print_case, "\n", print_break);
   aout <<
     "  if (prefix)\n"
@@ -668,7 +705,7 @@ makehdrname (str fname)
   strbuf hdr;
   const char *p;
 
-  if ((p = strrchr (fname, '/')))
+  if ((p = strrchr (fname.cstr(), '/')))
     p++;
   else p = fname;
 
@@ -731,7 +768,8 @@ gencfile (str fname)
   if  (!skip_xml) {
     aout << "#define ENABLE_XML_XDR 1\n";
   }
-  aout << "#include \"" << makehdrname (fname) << "\"\n\n";
+  aout << "#include \"" << makehdrname (fname) << "\"\n"
+       << "#include \"xdrsnappy.h\"\n\n";
 
 #if 0
   for (const rpc_sym *s = symlist.base (); s < symlist.lim (); s++)

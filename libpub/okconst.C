@@ -120,6 +120,7 @@ u_int ok_shutdown_retries = 3;      // n retries before giving up
 u_int ok_db_retries_max = 100;
 u_int ok_db_retries_delay = 3;
 u_int ok_demux_timeout = 30;        // clients have 30 secs to make a REQ
+u_int ok_ka_timeout = 10;           // clients have 10 secs to use a ka conn
 
 //
 // okd constants
@@ -178,7 +179,7 @@ const char *ok_mmcd = "/usr/local/lib/sfslite/mmcd";
 const char *ok_mmc_file = "/var/run/mmcd.mmf";
 
 // what OKWS reports it is in HTTP responses
-const char *okws_server_label = "OKWS/"VERSION;
+const char *okws_server_label = "OKWS/" VERSION;
 
 
 //
@@ -348,7 +349,7 @@ static void
 vec2vec (vec<const char *> *out, const vec<str> &in)
 {
   for (size_t i = 0; i < in.size (); i++) {
-    out->push_back (in[i]);
+    out->push_back (in[i].cstr());
   }
   out->push_back (NULL);
 }

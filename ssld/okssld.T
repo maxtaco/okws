@@ -12,6 +12,10 @@
 #include "tame_connectors.h"
 #include "tame_io.h"
 
+#ifdef HAVE_LINUX_PRCTL_DUMP
+# include <sys/prctl.h>
+#endif /* HAVE_LINUX_PRCTL_DUMP */
+
 //-----------------------------------------------------------------------
 
 namespace okssl {
@@ -32,6 +36,7 @@ namespace okssl {
   private:
     int _fd;
     sockaddr_in _sin;
+    int _renegotiations;
   };
 
   //-----------------------------------------------------------------------
@@ -61,7 +66,10 @@ namespace okssl {
 	_accept_enabled (false),
 	_timeout (ok_ssl_timeout),
 	_debug_startup (false),
-	_logd (NULL) {}
+	_logd (NULL),
+	_cipher_order(false),
+	_cli_renog(false)
+    {}
 
     bool parseopt (int argc, char *argv[]);
 
@@ -108,6 +116,8 @@ namespace okssl {
     u_int _timeout;
     bool _debug_startup;
     fast_log_t *_logd;
+    bool _cipher_order;
+    bool _cli_renog;
   };
 
   //-----------------------------------------------------------------------
@@ -263,7 +273,7 @@ namespace okssl {
       warn ("Cannot allocate a socketpair %m\n");
     } else {
       make_async (fds[0]);
-      if (!prx.init (_ssl_ctx, c->fd (), fds[0])) {
+      if (!prx.init (_ssl_ctx, c->fd (), fds[0], _cli_renog)) {
 	warn ("Failed to initialize new proxy object\n");
       } else {
 	cli = c->to_str ();
@@ -390,6 +400,13 @@ namespace okssl {
 	ret = true;
       }
     }
+
+#ifdef HAVE_LINUX_PRCTL_DUMP
+    if (prctl (PR_SET_DUMPABLE, 1) != 0) {
+        warn ("prctl(PR_SET_DUMPABLE, 1) failed: %m\n");
+    }
+#endif /* HAVE_LINUX_PRCTL_DUMP */
+
     return ret;
   }
 
@@ -495,6 +512,21 @@ namespace okssl {
 
   //-----------------------------------------------------------------------
 
+  static void ssl_info_callback(const SSL* ssl, int where, int ret) {
+    if (0 != (where & SSL_CB_HANDSHAKE_START)) {
+      ssl_to_std_proxy_t* prx = static_cast<ssl_to_std_proxy_t*> 
+	SSL_get_app_data(ssl);
+      if (prx) prx->renegotiate();
+    } else if (0 != (where & SSL_CB_HANDSHAKE_DONE)) {
+      ssl_to_std_proxy_t* prx = static_cast<ssl_to_std_proxy_t*> 
+	SSL_get_app_data(ssl);
+      if (prx && !prx->allow_cli_renog())
+	ssl->s3->flags |= SSL3_FLAGS_NO_RENEGOTIATE_CIPHERS;
+    }
+  }
+
+  //-----------------------------------------------------------------------
+
   bool
   okssld_t::init_ssl ()
   {
@@ -518,6 +550,19 @@ namespace okssl {
     } else {
       SSL_CTX_set_quiet_shutdown (_ssl_ctx, 1);
       SSL_CTX_sess_set_cache_size(_ssl_ctx, 0x1000);
+#ifdef HAVE_SSL_NOCOMP 
+      SSL_CTX_set_options(_ssl_ctx, SSL_OP_NO_COMPRESSION);
+#endif
+      if (_cipher_order)
+          SSL_CTX_set_options(_ssl_ctx, SSL_OP_CIPHER_SERVER_PREFERENCE);
+
+      SSL_CTX_set_options(_ssl_ctx, SSL_OP_SINGLE_DH_USE);
+      SSL_CTX_set_options(_ssl_ctx, SSL_OP_SINGLE_ECDH_USE);
+
+      SSL_CTX_set_tmp_ecdh(_ssl_ctx, 
+                           EC_KEY_new_by_curve_name(NID_X9_62_prime256v1));
+
+      SSL_CTX_set_info_callback(_ssl_ctx, ssl_info_callback);
       ret = true;
     }
     if (!ret) 
@@ -625,7 +670,7 @@ namespace okssl {
   {
     int ch;
     bool rc = true;
-    while (rc && (ch = getopt (argc, argv, "Dm:c:k:u:g:d:l:t:p:j:n:L:")) != -1) {
+    while (rc && (ch = getopt (argc, argv, "RODm:c:k:u:g:d:l:t:p:j:n:L:")) != -1) {
       switch (ch) {
       case 'j':
 	_jaildir = optarg;
@@ -677,6 +722,12 @@ namespace okssl {
 	break;
       case 'L':
 	_cipher_list = optarg;
+	break;
+      case 'O':
+	_cipher_order = true;
+	break;
+      case 'R':
+	_cli_renog = true;
 	break;
       case 'p':
 	{

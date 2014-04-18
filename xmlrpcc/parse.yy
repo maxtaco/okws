@@ -29,6 +29,11 @@ static int proc_compare (const void *, const void *);
 static int vers_compare (const void *, const void *);
 static str getnewid (str);
 static str getid (str);
+
+#ifdef __clang__
+// bison issues statements with extra parenthesies
+#pragma clang diagnostic ignored "-Wparentheses-equality"
+#endif  // __clang__
 %}
 
 %token <str> T_ID
@@ -54,10 +59,13 @@ static str getid (str);
 %token T_CASE
 %token T_DEFAULT
 
+%token T_COMPRESSED
+
 %token <str> T_OPAQUE
 %token <str> T_STRING
 
-%type <str> id newid type_or_void type base_type value
+%type <arg> type_or_void maybe_compressed_type
+%type <str> id newid type base_type value
 %type <decl> declaration
 %type <cnst> enum_cnstag
 %type <num> number
@@ -288,7 +296,14 @@ declaration: type T_ID ';'
 	   $$.bound = "RPC_INFINITY"; }
 	;
 
-type_or_void: type | T_VOID { $$ = "void"; }
+type_or_void:
+      maybe_compressed_type
+    | T_VOID { $$ = {"void"}; }
+	;
+
+maybe_compressed_type:
+    T_COMPRESSED type { $$ = {$2, true}; }
+    | type { $$ = {$1}; }
 	;
 
 type: base_type | id
@@ -306,7 +321,7 @@ base_type: T_UNSIGNED { $$ = "u_int32_t"; }
 value: id | T_NUM
 	;
 
-number: T_NUM { $$ = strtoul ($1, NULL, 0); }
+number: T_NUM { $$ = strtoul ($1.cstr(), NULL, 0); }
 	;
 
 newid: T_ID { $$ = getnewid ($1); }

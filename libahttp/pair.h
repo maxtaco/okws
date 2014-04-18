@@ -33,6 +33,7 @@
 #include "okscratch.h"
 #include "pescape.h"
 #include "pub3expr.h"
+#include "rpctypes.h"
 
 struct encode_t {
   encode_t (strbuf *o, ptr<ok::scratch_handle_t> s = NULL)
@@ -61,6 +62,7 @@ struct pair_t {
 
   bool to_int (int64_t *v) const;
   bool to_uint64 (u_int64_t *v) const;
+  bool to_double (double *d) const;
   vec<int64_t> *to_int () const;
   vec<u_int64_t> *to_uint64 () const;
 
@@ -83,11 +85,9 @@ struct pair_t {
   bool encflag;
 };
 
-static void pair_dump1 (const pair_t &p) { p.dump1 (); }
-static void pair_encode (encode_t *e, str sep, const pair_t &p)
-{ p.encode (e, sep); }
-static void pair_trav (callback<void, const pair_t &>::ref cb, pair_t *p)
-{ (*cb) (*p); }
+extern void pair_dump1 (const pair_t &p);
+extern void pair_encode (encode_t *e, str sep, const pair_t &p);
+extern void pair_trav (callback<void, const pair_t &>::ref cb, pair_t *p);
 
 template<class C = pair_t>
 class pairtab_t {
@@ -96,12 +96,15 @@ public:
   virtual ~pairtab_t () { tab.deleteall (); }
   inline str lookup (const str &key) const;
   inline bool lookup (const str &key, str *r) const;
+  template<size_t _N> inline bool lookup (const str &key, rpc_str<_N> *r) const;
   inline bool lookup (const str &key, vec<str> *v) const;
   inline bool blookup (const str &key) const;
   inline vec<int64_t> *ivlookup (const str &key) const;
   inline vec<u_int64_t> *uivlookup (const str &key) const;
   inline bool lookup (const str &key, u_int64_t *v) const;
   template<typename T> inline bool lookup (const str &key, T *v) const;
+  bool lookup (const str &key, double *d) const;
+  bool lookup (const str &key, float *d) const;
   pairtab_t<C> &insert (const str &key, const str &val = NULL, 
 			bool append = true, bool encode = true);
   void insert (pair_t *p);
@@ -113,8 +116,8 @@ public:
   { tab.traverse (wrap (&pair_encode, e, get_sep ())); }
   inline str safe_lookup (const str &key) const;
   inline str operator[] (const str &k) const { return safe_lookup (k); }
-  inline bool exists (const str &k) const 
-  { return safe_lookup (k).len () > 0; }
+  inline bool exists (const str &k) const { return safe_lookup (k).len () > 0; }
+  inline bool strict_exists (const str &k) const { return bool(lookup(k)); }
   inline bool remove (const str &k);
   inline void traverse (callback<void, const pair_t &>::ref cb)
   { lst.traverse (wrap (pair_trav, cb)); }
@@ -176,6 +179,12 @@ pairtab_t<C>::lookup (const str &key, str *r) const
     ret = true;
   }
   return ret;
+}
+
+template<class C> template<size_t _N> bool
+pairtab_t<C>::lookup (const str &key, rpc_str<_N> *r) const
+{
+    return lookup(key, (str*)r);
 }
 
 template<class C> bool
@@ -245,6 +254,28 @@ pairtab_t<C>::lookup (const str &key, T *v) const
     return false;
   *v = i;
   return true;
+}
+
+template<typename T> bool
+pairtab_t<T>::lookup (const str &key, double *d) const
+{
+  assert (key && d);
+  pair_t *p = tab[key];
+  return p && p->to_double (d);
+}
+
+template<typename T> bool
+pairtab_t<T>::lookup (const str &key, float *fp) const
+{
+  double tmp;
+  assert (key && fp);
+  pair_t *p = tab[key];
+  bool ret = false;
+  if (p && p->to_double (&tmp)) {
+    *fp = tmp;
+    ret = true;
+  }
+  return ret;
 }
 
 template<class C> template<typename T> pairtab_t<C> &

@@ -156,6 +156,22 @@ json_decoder_t::rpc_traverse (u_int64_t &obj)
 
 //-----------------------------------------------------------------------
 
+bool 
+json_decoder_t::rpc_traverse (double &obj) 
+{ 
+  double tmp;
+  bool ret = false;
+  if (is_empty ()) { error_empty ("double"); }
+  else if (!top ()->to_double (&tmp)) { error_wrong_type ("double", top ()); }
+  else {
+    ret = true;
+    obj = tmp;
+  }
+  return ret;
+}
+
+//-----------------------------------------------------------------------
+
 bool
 json_decoder_t::rpc_decode_opaque (str *s)
 {
@@ -262,7 +278,7 @@ json_decoder_t::rpc_traverse (bigint &b)
   else if (!(tmp = top()->to_str (false))) { 
     error_wrong_type ("string", top()); 
   } else {
-    b = tmp;
+    b = bool(tmp);
     ret = true;
   }
   return ret;
@@ -489,6 +505,15 @@ bool
 json_encoder_t::rpc_traverse (u_int64_t &obj)
 {
   set_top (pub3::expr_uint_t::alloc (obj));
+  return true;
+}
+
+//-----------------------------------------------------------------------
+
+bool
+json_encoder_t::rpc_traverse (double &obj)
+{
+  set_top (pub3::expr_double_t::alloc (obj));
   return true;
 }
 
@@ -822,7 +847,7 @@ xdropq2json (str typ, const str &xdr_opq)
     // We need this dummy just as a result of the extensible_rpc v_XDR_t
     // base class.  It really shouldn't need to do anything...
 
-    xdrmem m (xdr_opq, xdr_opq.len ());
+    xdrmem m (xdr_opq.cstr(), xdr_opq.len ());
     XDR *xm = &m;
     void *obj = (*pp.alloc)();
     bool ok = (*pp.proc) (xm, obj);

@@ -97,6 +97,10 @@ private:
 
 //-----------------------------------------------------------------------
 
+bool is_internal(const ptr<const ahttpcon>&);
+
+//-----------------------------------------------------------------------
+
 class demux_data_t {
 private:
   static struct timespec timespec_null;
@@ -173,7 +177,7 @@ public:
     memcpy (x->sin.base (), (void *)sin, sizeof (*sin));
     _demux_data->to_xdr (x);
     x->reqno = _con->get_reqno ();
-    if (!_con->do_peek()) { _con->collect_scraps (x->scraps); }
+    _con->collect_scraps (x->scraps);
   }
 
 private:
@@ -569,10 +573,12 @@ public:
 
   void set_hdr_field (const str &k, const str &v);
 
-  void set_demux_data (ptr<demux_data_t> d) { _demux_data = d; }
-  bool is_ssl () const { return _demux_data && _demux_data->ssl (); }
-  str ssl_cipher () const;
-  int get_reqno () const;
+  void set_demux_data(ptr<demux_data_t> d) { _demux_data = d; }
+
+  virtual bool is_ssl() const;
+
+  str ssl_cipher() const;
+  int get_reqno() const;
 
   virtual ptr<pub3::ok_iface_t> pub3 () ;
   virtual ptr<pub3::ok_iface_t> pub3_local ();
@@ -635,7 +641,7 @@ protected:
 // with x-URL-encoded GET, POST of multipart form data.
 //
 class okclnt_t : public okclnt_base_t, 
-		 public http_parser_cgi_t 
+                 public http_parser_cgi_t
 { 
 public:
   okclnt_t (ptr<ahttpcon> xx, oksrvc_t *o, u_int to = 0) : 
@@ -670,11 +676,15 @@ public:
   okclnt2_t (ptr<ahttpcon> x, oksrvc_t *c, u_int to = 0) :
     okclnt_t (x, c, to) {}
 
-  void serve () { serve_T (); }
-  void process () {}
-  virtual void process (proc_ev_t ev) = 0;
-  void send_complete () {}
-  void serve_complete () { delete this; }
+  bool is_ssl() const override;
+  uint32_t get_ip() const;
+  str get_ip_str() const;
+
+  void serve() { serve_T(); }
+  void process() {}
+  virtual void process(proc_ev_t ev) = 0;
+  void send_complete() {}
+  void serve_complete() { delete this; }
 
   // okclnt2_t allows use of keepalive connections, but only
   // if this flag is toggled to true...
@@ -690,9 +700,27 @@ class dbcon_t : public helper_inet_t {
 public:
   dbcon_t (const rpc_program &g, const str &h, u_int p)
     : helper_inet_t (g, h, p, 0) {}
+  dbcon_t (const rpc_program &g, const str &h, u_int p, u_int o)
+    : helper_inet_t (g, h, p, o) {}
 
   str getname () const 
   { return strbuf ("database: ") << helper_inet_t::getname (); }
+};
+
+template<> struct hashfn<dbcon_t*> {
+    hashfn () {}
+    hash_t operator() (dbcon_t *const c) const {
+        size_t i = (size_t)c;
+        return (i >> 32) ^ (i & 0xFFFFFFFF);
+    }
+};
+
+template<> struct equals<dbcon_t*> {
+    equals() {}
+    bool operator() (dbcon_t *const a, dbcon_t *const b) const
+    {
+        return a == b;
+    }
 };
 
 //-----------------------------------------------------------------------

@@ -356,12 +356,27 @@ namespace pub3 {
 
   //-----------------------------------------------------------------------
 
-  ptr<expr_t> expr_cow_t::copy () const
-  { return New refcounted<expr_cow_t> (*this); }
-  ptr<expr_t> expr_cow_t::deep_copy () const
-  { return New refcounted<expr_cow_t> (*this); }
-  ptr<expr_t> expr_cow_t::cow_copy () const
-  { return New refcounted<expr_cow_t> (*this); }
+  ptr<expr_t> expr_cow_t::copy () const { 
+    ptr<expr_cow_t> new_cow = New refcounted<expr_cow_t> (*this); 
+
+    // DK: The new copy should consider itself to be in the 'orig' state so
+    // that expr_cow_t objects which are copied more than once do not
+    // incorrectly point to the same object.
+    //
+    // Example: COW object A is copied to object B, then modified, setting the
+    // _copy field in B.  COW object B is then copied to object C.  If object C
+    // is now modified, object B would also see the changes without this fix.
+    // With the fix, object C instead correctly copies itself again before
+    // being modified.
+    if (new_cow->_orig == NULL) {
+      assert (_copy);
+      new_cow->_orig = new_cow->_copy;
+      new_cow->_copy = NULL;
+    }
+    return new_cow;
+  }
+  ptr<expr_t> expr_cow_t::deep_copy () const { return copy(); }
+  ptr<expr_t> expr_cow_t::cow_copy () const { return copy(); }
 
   //-----------------------------------------------------------------------
   
@@ -1232,7 +1247,16 @@ namespace pub3 {
     }
     return ret;
   }
-  
+
+  double expr_int_t::to_double () const { return double (_val); }
+
+  bool
+  expr_int_t::to_double (double *out) const
+  {
+      *out = double(_val);
+      return true;
+  }
+ 
   //====================================================================
   
   scalar_obj_t
@@ -1286,6 +1310,15 @@ namespace pub3 {
     return ret;
   }
 
+  double expr_uint_t::to_double () const { return double (_val); }
+
+  bool
+  expr_uint_t::to_double (double *out) const
+  {
+      *out = double(_val);
+      return true;
+  }
+ 
   //====================================================================
   
   scalar_obj_t
@@ -1613,7 +1646,7 @@ namespace pub3 {
   ptr<rxx>
   rxx_factory_t::_compile (str body, str opts, str *errp)
   {
-    const char *b = body;
+    const char *b = body.cstr();
     const char *o = "";
     if (opts) o = opts;
     
@@ -2344,6 +2377,17 @@ namespace pub3 {
     if (!x) { ret = expr_t::undef_str; }
     else { ret = x->type_to_str (); }
     return ret;
+  }
+
+  //--------------------------------------------------------------------
+
+  const str* expr_cow_t::documentation () const
+  {
+    ptr<const expr_t> x = const_ptr ();
+    if (x) { return x->documentation ();
+    } else {
+      return NULL;
+    }
   }
 
   //--------------------------------------------------------------------

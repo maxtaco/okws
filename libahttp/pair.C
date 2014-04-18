@@ -23,6 +23,12 @@
 
 #include "pair.h"
 
+void pair_dump1 (const pair_t &p) { p.dump1 (); }
+void pair_encode (encode_t *e, str sep, const pair_t &p)
+{ p.encode (e, sep); }
+void pair_trav (callback<void, const pair_t &>::ref cb, pair_t *p)
+{ (*cb) (*p); }
+
 void
 pair_t::dump1 () const
 {
@@ -145,3 +151,18 @@ pair_t::to_uint64 (u_int64_t *v) const
 }
 
 
+bool
+pair_t::to_double (double *dp) const 
+{
+  bool ret = false;
+  if (vals.size() > 0) {
+    const char *start = vals[0].cstr ();
+    char *ep = NULL;
+    double d = strtod(start, &ep);
+    if (ep && *ep == '\0') {
+      ret = true;
+      *dp = d;
+    }
+  }
+  return ret;
+}

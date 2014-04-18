@@ -8,7 +8,8 @@
 import random
 import socket
 import struct
-import json
+try: import simplejson as json
+except ImportError: import json
 import time
 
 ##-----------------------------------------------------------------------
@@ -76,7 +77,7 @@ class rpc_msg:
         if klass.stat_map: return
         for i in [ "SUCCESS", "PROG_UNAVAIL", "PROG_MISMATCH",
                    "PROC_UNAVAIL", "GARBAGE_ARGS", "SYSTEM_ERR"] :
-            klass.stat_map[i] = getattr (klass, i)
+            klass.stat_map[getattr (klass, i)] = i
 
     ##----------------------------------------
 
@@ -85,7 +86,7 @@ class rpc_msg:
         klass.init ()
         ret = klass.stat_map.get (i)
         if not ret:
-            ret = "UNKNOWN_ERROR"
+            ret = "UNKNOWN_ERROR: %s" % i
         return ret
 
 ##-----------------------------------------------------------------------
@@ -278,6 +279,7 @@ class JsonWrapDict (dict):
     def __init__ (self, d):
         dict.__init__ (self, d)
         for (k,v) in d.items ():
+            k = k.encode("utf8")
             v = JsonWrap.alloc (v)
             self[k] = v
             setattr (self, k, v)
@@ -400,7 +402,7 @@ class Client:
         packet.decode ()
 
         if packet.xid != xid:
-            raise Error, "bad xid (%d != %d)" % (xid, xid_in)
+            raise Error, "bad xid (%d != %d)" % (xid, packet.xid)
         if packet.mtype != rpc_msg.REPLY:
             raise Error, "expected reply bit, got %d" % reply
         if packet.stat != rpc_msg.SUCCESS:

@@ -41,6 +41,7 @@ namespace pub3 {
     void eval_args (eval_t *e, args_t in, margs_t *out) const;
 
     str _lib, _name;
+
   };
 
   //-----------------------------------------------------------------------
@@ -120,16 +121,26 @@ namespace pub3 {
   //
   class library_t {
   public:
-    library_t () {}
+    library_t (const str &doc) : _only_in_libname(false), _doc(doc) {}
+    library_t () : _only_in_libname(false) {}
     ~library_t () {}
     void bind (ptr<bindtab_t> b);
     ptr<bindtab_t> bind ();
     static void import (ptr<library_t> l);
     static void clear_all ();
-    void bind_all (str s);
+    void bind_all (str s,bool only_in_libname = false);
   protected:
     vec<ptr<compiled_fn_t> > _functions;
     str _all_libname;
+
+    //The dictionary in which the functions are allocated.
+    ptr<expr_dict_t> _all_dict;
+
+    //Use in conjunction with _all_libname to make sure that the functions
+    //are only bound in the libname object and not in the top namespace.
+    bool _only_in_libname;
+
+    str _doc;
   };
 
   //-----------------------------------------------------------------------
@@ -144,16 +155,23 @@ namespace pub3 {
   // so that the following macros might work.  See librfn/okrfn.h for
   // an example.
   //
-  
-#define PUB3_COMPILED_FN(x,pat)				                \
-  class x##_t : public pub3::patterned_fn_t {				\
-  public:								\
-    x##_t () : patterned_fn_t (libname, #x, pat) {}			\
-    ptr<const expr_t>							\
+#define PUB3_DOC_MEMBERS\
+  static const str DOCUMENTATION;                                       \
+  virtual const str* documentation () const { return &DOCUMENTATION; };
+#define NO_PUB3_DOC_MEMBERS
+
+#define PUB3_COMPILED_FN_FULL(x,pat,__doc)                        \
+  class x##_t : public pub3::patterned_fn_t {                   \
+   public:                                                         \
+   x##_t () : patterned_fn_t (libname, #x, pat) {};               \
+   ptr<const expr_t>                                           \
     v_eval_2 (eval_t *p, const vec<arg_t> &args) const;			\
+    __doc                                                         \
   }
+#define PUB3_COMPILED_FN(__x,__pat)	PUB3_COMPILED_FN_FULL(__x,__pat,NO_PUB3_DOC_MEMBERS)
+#define PUB3_COMPILED_FN_DOC(__x,__pat)	PUB3_COMPILED_FN_FULL(__x,__pat,PUB3_DOC_MEMBERS)
   
-#define PUB3_FILTER(x)					     \
+#define PUB3_FILTER_FULL(x,__doc)                          \
   class x##_t : public pub3::patterned_fn_t {		     \
   public:						     \
   x##_t () : patterned_fn_t (libname, #x, "s") {}	     \
@@ -161,32 +179,51 @@ namespace pub3 {
   ptr<const expr_t>					     \
   v_eval_2 (eval_t *e, const vec<arg_t> &args) const	     \
     { return expr_str_t::safe_alloc (filter (args[0]._s)); } \
+  __doc                                                        \
   }
+#define PUB3_FILTER(__x)	PUB3_FILTER_FULL(__x,NO_PUB3_DOC_MEMBERS)
+#define PUB3_FILTER_DOC(__x)	PUB3_FILTER_FULL(__x,PUB3_DOC_MEMBERS)
 
-#define PUB3_COMPILED_HANDROLLED_FN(x)					\
+#define PUB3_COMPILED_HANDROLLED_FN_FULL(x,__doc)             \
   class x##_t : public pub3::compiled_fn_t {				\
   public:								\
   x##_t () : compiled_fn_t (libname, #x) {}				\
   ptr<const expr_t> eval_to_val (eval_t *e, args_t args) const;		\
   void pub_to_val (eval_t *p, args_t args, cxev_t, CLOSURE) const;	\
   bool count_args (eval_t *p, size_t s) const;			\
+  __doc                                                   \
   }
+#define PUB3_COMPILED_HANDROLLED_FN(__x)	\
+  PUB3_COMPILED_HANDROLLED_FN_FULL(__x,NO_PUB3_DOC_MEMBERS)
+#define PUB3_COMPILED_HANDROLLED_FN_DOC(__x) \
+  PUB3_COMPILED_HANDROLLED_FN_FULL(__x,PUB3_DOC_MEMBERS)
   
-#define PUB3_COMPILED_UNPATTERNED_FN(x)					\
+#define PUB3_COMPILED_UNPATTERNED_FN_FULL(x,__doc)            \
   class x##_t : public pub3::compiled_fn_t {				\
   public:								\
   x##_t () : compiled_fn_t (libname, #x) {}				\
   ptr<const expr_t>							\
   v_eval_1 (eval_t *p, const margs_t &args) const;			\
+  __doc                                                       \
   }
+#define PUB3_COMPILED_UNPATTERNED_FN(__x)	\
+  PUB3_COMPILED_UNPATTERNED_FN_FULL(__x,NO_PUB3_DOC_MEMBERS)
+#define PUB3_COMPILED_UNPATTERNED_FN_DOC(__x) \
+  PUB3_COMPILED_UNPATTERNED_FN_FULL(__x,PUB3_DOC_MEMBERS)
+ 
   
-#define PUB3_COMPILED_FN_BLOCKING(x,pat)			        \
+#define PUB3_COMPILED_FN_BLOCKING_FULL(x,pat,__doc)               \
   class x##_t : public pub3::patterned_fn_blocking_t {			\
   public:								\
   x##_t () : patterned_fn_blocking_t (libname, #x, pat) {}		\
   void									\
   v_pub_to_val_2 (eval_t *, const vec<arg_t> &, cxev_t, CLOSURE) const; \
+  __doc                                                                   \
   }
+#define PUB3_COMPILED_FN_BLOCKING(__x,__pat) \
+  PUB3_COMPILED_FN_BLOCKING_FULL(__x,__pat,NO_PUB3_DOC_MEMBERS)
+#define PUB3_COMPILED_FN_BLOCKING_DOC(__x,__pat) \
+  PUB3_COMPILED_FN_BLOCKING_FULL(__x,__pat,PUB3_DOC_MEMBERS)
   
   //-----------------------------------------------------------------------
 

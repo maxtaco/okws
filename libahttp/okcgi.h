@@ -100,7 +100,7 @@ public:
   virtual abuf_stat_t parse_guts_driver ();
   abuf_stat_t parse_key_or_val (str *r, bool use_internal_state = true);
 
-  virtual bool flookup (const str &k, cgi_files_t **v) { return false; }
+  virtual bool flookup (const str &k, cgi_files_t **v) const { return false; }
 
   void set_max_scratchlen (ssize_t i) { _maxlen = i; }
 
@@ -137,7 +137,13 @@ public:
   cgiw_t &operator= (cgi_t *cc) { c = cc; return *this; }
   operator cgi_t *() const { return c; }
   inline str operator[] (const str &k) const { return (*c)[k]; }
+
+  // It's there and it's not the empty string: p=0 is true, p= is not
   inline bool exists (const str &k) const { return c->exists (k); }
+  
+  // It's there, and it's possibly the empty string: p=0 is true, p= is true
+  inline bool strict_exists(const str &k) const { return c->strict_exists(k); }
+
   inline bool lookup (const str &k, str *r) const { return c->lookup (k,r); }
   inline bool blookup (const str &k) const { return c->blookup (k); }
   inline vec<int64_t> *ivlookup (const str &k) const { return c->ivlookup (k);}
@@ -147,10 +153,12 @@ public:
   { return c->lookup (k, v); }
   template<typename T> bool lookup (const str &k, T *v) const
   { return c->lookup (k, v); }
+  bool lookup (const str &k, double *d) const { return c->lookup (k, d); }
+  bool lookup (const str &k, float *f) const { return c->lookup (k, f); }
   template<typename T> cgiw_t & insert (const str &k, T v, bool ap = true) 
   { c->insert (k, v, ap); return (*this); }
   cgi_t *cgi () const { return c; }
-  bool flookup (const str &k, cgi_files_t **v) { return c->flookup (k,v); }
+  bool flookup (const str &k, cgi_files_t **v) const { return c->flookup (k,v); }
   void load_dict (pub3::dict_t *d) const { return c->load_dict (d); }
   
 private:
@@ -166,9 +174,9 @@ class cookie_t : protected cgi_t
 {
 public:
   cookie_t (const str &d = NULL, const str &p = "/", const str &e = NULL,
-	    bool s = false) 
-    : cgi_t (), domain ("domain", d, false), path ("path", p, false), 
-      expires ("expires", e, false), secure (s) {}
+	    bool s = false, bool ho = false) 
+    : cgi_t (), domain ("Domain", d, false), path ("Path", p, false), 
+      expires ("Expires", e, false), secure (s), httponly(ho) {}
 							       
   cookie_t &add (const str &k, const str &v) 
   { insert (k, v, false); return (*this); }
@@ -186,6 +194,7 @@ public:
   cookie_t &set_expires (const str &s) { expires.addval (s); return (*this); }
   
   cookie_t &set_secure (bool fl = true) { secure = fl; return (*this); }
+  cookie_t &set_httponly (bool fl = true) { httponly = fl; return (*this); }
   
   str to_str () const { return cgi_t::encode (); }
   str get_sep () const { return "; "; }
@@ -195,6 +204,7 @@ public:
   cgi_pair_t path;
   cgi_pair_t expires;
   bool secure;
+  bool httponly;
 };
 
 

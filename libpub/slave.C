@@ -123,6 +123,12 @@ pub_server (pubserv_cb cb, const str &s, int *outfd)
   return pubfd;
 }
 
+int
+pub_server_clientfd (pubserv_cb cb, int pubfd) {
+    pub_server_fd(wrap (pub_accept, cb, pubfd), pubfd);
+    return true;
+}
+
 void
 helper_exec_t::setprivs ()
 {
@@ -154,7 +160,7 @@ helper_exec_t::launch (cbb c)
 {
   str p = argv[0];
   int sps[MAX_SOCKPAIRS][2];
-  str prog = find_program (p);
+  str prog = find_program (p.cstr());
   if (!prog) {
     warn << "Cannot find executable: " << p << "\n";
     (*c) (false);
@@ -210,7 +216,7 @@ helper_exec_t::launch (cbb c)
 void
 helper_unix_t::launch (cbb c)
 {
-  fd = unixsocket_connect (sockpath);
+  fd = unixsocket_connect (sockpath.cstr());
   if (fd < 0) {
     hwarn (strerror (errno));
     (*c) (false);
@@ -269,20 +275,33 @@ helper_inet_t::launch_cb (cbb c, ptr<bool> df, int f)
 }
 
 void
+helper_t::call_connect_cb(connect_params_t cp, bool success) {
+    if (!success) {
+        (*cp.cb)(RPC_PROCUNAVAIL);
+    } else 
+        docall(cp.procno, cp.in, cp.out, cp.cb, cp.duration);
+}
+
+void
 helper_t::call (u_int32_t procno, const void *in, void *out, aclnt_cb cb,
-		time_t duration)
+                time_t duration)
 {
-  if (status != HLP_STATUS_OK || calls >= max_calls) {
-    if ((opts & HLP_OPT_QUEUE) && (status != HLP_STATUS_HOSED) && 
-	queue.size () < max_qlen) {
-      queue.push_back (New queued_call_t (procno, in, out, cb, duration));
-      return;
-    } else {
-      (*cb) (RPC_PROCUNAVAIL);
-      return;
+    if (status != HLP_STATUS_OK || calls >= max_calls) {
+        if ((opts & HLP_OPT_QUEUE) && (status != HLP_STATUS_HOSED) && 
+            queue.size () < max_qlen) {
+            queue.push_back (New queued_call_t (procno, in, out, cb, duration));
+            return;
+        } else if (opts & HLP_OPT_CTONDMD && status != HLP_STATUS_HOSED &&
+                   status != HLP_STATUS_RETRY) {
+            connect_params_t cp(procno, in, out, cb, duration);
+            connect( wrap(this, &helper_t::call_connect_cb, cp) );
+            return;
+        } else {
+            (*cb) (RPC_PROCUNAVAIL);
+            return;
+        }
     }
-  }
-  docall (procno, in, out, cb, duration);
+    docall (procno, in, out, cb, duration);
 }
 
 void

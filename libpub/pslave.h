@@ -47,6 +47,7 @@ typedef enum { HLP_STATUS_NONE = 0,
 #define HLP_OPT_PING    (1 << 1)        // ping helper on startup
 #define HLP_OPT_NORETRY (1 << 2)        // do not try to reconnect
 #define HLP_OPT_CNCT1   (1 << 3)        // connect only once on startup
+#define HLP_OPT_CTONDMD (1 << 4)        // connect on first call()
 
 #define HLP_MAX_RETRIES 100
 #define HLP_RETRY_DELAY 4
@@ -60,6 +61,8 @@ bool pub_server (pubserv_cb cb, u_int port, u_int32_t addr = INADDR_ANY,
 		 int *out_fd = NULL);
 int pub_server (pubserv_cb cb, const str &path,
 		int *out_fd = NULL);
+int pub_server_clientfd (pubserv_cb cb, int pubfd);
+
 pslave_status_t pub_slave  (pubserv_cb cb, u_int port = 0, 
 			    pslave_status_t *s = NULL);
 
@@ -81,6 +84,7 @@ public:
 protected:
 };
 
+
 class helper_t : public helper_base_t {
 public:
   helper_t (const rpc_program &rp, u_int o = 0) 
@@ -89,6 +93,17 @@ public:
       max_qlen (hlpr_max_qlen), max_calls (hlpr_max_calls),
       retries (0), calls (0), status (HLP_STATUS_NONE), 
       opts (o), destroyed (New refcounted<bool> (false)) {}
+
+  struct connect_params_t {
+    connect_params_t(u_int32_t p, const void* i, void* o, aclnt_cb c,
+                     time_t d) : procno(p), in(i), out(o), cb(c), 
+                                 duration(d) { }
+    u_int32_t procno;
+    const void* in;
+    void* out;
+    aclnt_cb cb;
+    time_t duration;
+  };
 
   virtual ~helper_t ();
   virtual vec<str> *get_argv () { return NULL; }
@@ -117,6 +132,12 @@ public:
   // changes status
   void set_status_cb (status_cb_t c) { stcb = c; }
 
+  str getname () const
+  {
+      str nm = rpcprog.name ?: "null_program_name";
+      return helper_t::getname () << ":" << nm;
+  }
+
 protected:
   void status_change (hlp_status_t ns);
   void call_status_cb () { if (stcb) (*stcb) (status); }
@@ -128,7 +149,7 @@ protected:
   void kill_aclnt_priv();
   void retried (ptr<bool> df, bool b);
   void connected (cbb::ptr cb, ptr<bool> df, bool b);
-
+  void call_connect_cb(connect_params_t cp, bool success);
 
   void process_queue ();
   void docall (u_int32_t procno, const void *in, void *out, aclnt_cb cb,
@@ -239,10 +260,17 @@ private:
 class helper_inet_t : public helper_t {
 public:
   helper_inet_t (const rpc_program &rp, const str &hn, u_int p, u_int o = 0) 
-    : helper_t (rp, o), hostname (hn), port (p) {}
-  virtual str getname () const { return (strbuf (hostname) << ":" << port); }
+    : helper_t (rp, o), hostname (hn), port (p) {
+        if (!hostname.len()) {
+            fatal << "ERROR: Empty hostname for connecting to "
+                  << rpcprog.name << "\n";
+        }
+    }
+  virtual str getname () const {
+      return (strbuf (hostname) << ":" << port << ":" << rpcprog.name);
+  }
   void call (u_int32_t procno, const void *in, void *out, aclnt_cb cb,
-	     time_t duration = 600) {
+          time_t duration = 600) {
     helper_t::call(procno, in, out, cb, duration);
   }
 

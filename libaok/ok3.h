@@ -36,6 +36,8 @@ public:
     htpv_t http_vers () const { return hdr.get_vers (); }
     okclnt3_t *ok_clnt () { return _ok_clnt; }
     const okclnt3_t *ok_clnt () const { return _ok_clnt; }
+
+    virtual bool want_raw_body() override { return _ok_clnt->want_raw_body(); }
   private:
     okclnt3_t *_ok_clnt;
   };
@@ -91,10 +93,14 @@ public:
     bool is_ready () const { return _replied; }
     void send (evb_t ev, time_t time_budget = 0, int *nsp = NULL, CLOSURE);
     void cancel (int status, evv_t ev, CLOSURE);
+    bool keep_serving() { return _serving; }
 
     //-----------------------------------------------------------------------
 
     void set_log_fixup_cb (cbv::ptr cb) { _log_fixup_cb = cb; }
+    void set_error_ok(bool ok) { _error_ok = ok; }
+    void set_add_connection(bool add) { _add_connection = add; }
+    void set_keep_serving(bool ks) { _serving = ks; }
 
     //-----------------------------------------------------------------------
 
@@ -135,6 +141,10 @@ public:
     ptr<req_t> _req;
     evv_t::ptr _release_ev;
     cbv::ptr _log_fixup_cb;
+
+    bool _error_ok;
+    bool _serving;
+    bool _add_connection;
   };
 
   //------------------------------------------------------------------------
@@ -191,6 +201,10 @@ public:
   ptr<rrpair_t> convert (ptr<req_t> req, ptr<resp_t> resp);
 
   //------------------------------------------------------------------------
+
+  // Override and return true if you want to handle parsing the HTTP body
+  // yourself (e.g. as JSON).
+  virtual bool want_raw_body() { return false; }
 
   virtual bool ssl_only () const { return false; } 
   virtual str  ssl_redirect_str () const { return NULL; }
